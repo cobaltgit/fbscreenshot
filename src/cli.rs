@@ -83,7 +83,7 @@ impl PixelFormat {
             PixelFormat::RGB888 => {
                 let b = buf[idx];
                 let g = buf[idx + 1];
-                let r = buf[idx + 2];``
+                let r = buf[idx + 2];
                 Rgba([r, g, b, 255])
             }
 
