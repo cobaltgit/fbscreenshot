@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use image::Rgba;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
@@ -44,21 +45,75 @@ impl FromStr for BitsPerPixel {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PixelFormat16 {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PixelFormat {
     Auto,
     RGB565,
     ARGB1555,
+    RGB888,
+    RGBA8888,
 }
 
-impl FromStr for PixelFormat16 {
+impl FromStr for PixelFormat {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "rgb565" => Ok(PixelFormat16::RGB565),
-            "argb1555" => Ok(PixelFormat16::ARGB1555),
-            _ => Err(format!("invalid 16-bit pixel format '{}'. Must be rgb565 or argb1555", s)),
+            "rgb565" => Ok(PixelFormat::RGB565),
+            "argb1555" => Ok(PixelFormat::ARGB1555),
+            "rgb888" => Ok(PixelFormat::RGB888),
+            "rgba888" => Ok(PixelFormat::RGBA8888),
+            _ => Err(format!("invalid pixel format '{}'. must be one of rgb565, argb1555, rgb888 or rgba8888", s)),
+        }
+    }
+}
+
+impl PixelFormat {
+    #[inline]
+    pub fn get_pixel(&self, buf: &[u8], idx: usize) -> Rgba<u8> {
+        match self {
+            PixelFormat::RGBA8888 => {
+                let b = buf[idx];
+                let g = buf[idx + 1];
+                let r = buf[idx + 2];
+                let a = buf[idx + 3];
+                Rgba([r, g, b, a])
+            }
+
+            PixelFormat::RGB888 => {
+                let b = buf[idx];
+                let g = buf[idx + 1];
+                let r = buf[idx + 2];``
+                Rgba([r, g, b, 255])
+            }
+
+            PixelFormat::RGB565 => {
+                let v = u16::from_le_bytes([buf[idx], buf[idx + 1]]);
+                let r = ((v >> 11) & 0x1f) as u8 * 255 / 31;
+                let g = ((v >> 5) & 0x3f) as u8 * 255 / 63;
+                let b = (v & 0x1f) as u8 * 255 / 31;
+                Rgba([r, g, b, 255])
+            }
+
+            PixelFormat::ARGB1555 => {
+                let v = u16::from_le_bytes([buf[idx], buf[idx + 1]]);
+                let a = if (v & 0x8000) != 0 { 255 } else { 0 };
+                let r = ((v >> 10) & 0x1f) as u8 * 255 / 31;
+                let g = ((v >> 5) & 0x1f) as u8 * 255 / 31;
+                let b = (v & 0x1f) as u8 * 255 / 31;
+                Rgba([r, g, b, a])
+            },
+
+            PixelFormat::Auto => todo!(),
+        }
+    }
+
+    pub fn bytes_per_pixel(&self) -> usize {
+        match self {
+            PixelFormat::RGBA8888 => 4,
+            PixelFormat::RGB888 => 3,
+            PixelFormat::RGB565 | PixelFormat::ARGB1555 => 2,
+            PixelFormat::Auto => todo!(),
         }
     }
 }
@@ -82,9 +137,9 @@ pub struct Args {
     #[argh(option, short = 'b', default = "BitsPerPixel::Auto")]
     pub bit_depth: BitsPerPixel,
 
-    /// pixel format (rgb565 or argb1555), currently only used for 16-bit framebuffers. will be ignored when capturing from device, required for 16bpp raw dumps.
-    #[argh(option, short = 'f', default = "PixelFormat16::Auto")]
-    pub pixel_format: PixelFormat16,
+    /// pixel format (rgb565, argb1555, rgb888, rgba8888), will be ignored when capturing from device, required for 16bpp raw dumps.
+    #[argh(option, short = 'f', default = "PixelFormat::Auto")]
+    pub pixel_format: PixelFormat,
 
     /// width of framebuffer. will be ignored when capturing from device, required for raw dumps.
     #[argh(option, short = 'w')]

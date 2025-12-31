@@ -30,7 +30,6 @@ fn fbscreenshot(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let width = args.width.ok_or("width is required for raw dumps")? as u32;
         let height = args.height.ok_or("height is required for raw dumps")? as u32;
-        let width_virtual = width;
         let bits_per_pixel = match args.bit_depth {
             BitsPerPixel::Sixteen => 16,
             BitsPerPixel::TwentyFour => 24,
@@ -40,28 +39,36 @@ fn fbscreenshot(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }, 
         };
         
-        (width, height, width_virtual, bits_per_pixel, None)
+        (width, height, width, bits_per_pixel, None)
     };
 
-    let is_argb1555 = if bits_per_pixel == 16 {
-        if let Some(ref vinfo) = vinfo_opt {
-            vinfo.red.length == 5 && vinfo.green.length == 5 && vinfo.blue.length == 5
-        } else {
-            match args.pixel_format {
-                PixelFormat16::ARGB1555 => true,
-                PixelFormat16::RGB565 => false,
-                _ => {
-                    return Err("pixel format must be specified for raw 16-bit dumps".into());
+    let pix_fmt = match bits_per_pixel {
+        32 => PixelFormat::RGBA8888,
+        24 => PixelFormat::RGB888,
+        16 => {
+            if let Some(ref vinfo) = vinfo_opt {
+                match (vinfo.red.length, vinfo.green.length, vinfo.blue.length) {
+                    (5, 5, 5) => PixelFormat::ARGB1555,
+                    _ => PixelFormat::RGB565,
+                }
+            } else {
+                match args.pixel_format {
+                    PixelFormat::Auto => { return Err("pixel format required for raw 16-bit dumps".into()) },
+                    _ => {
+                        if args.pixel_format != PixelFormat::RGB565 && args.pixel_format != PixelFormat::ARGB1555 {
+                             return Err("invalid 16-bit pixel format: must be either rgb565 or argb1555".into())
+                        }
+                        args.pixel_format
+                    }
                 }
             }
-        }
-    } else {
-        false
+        },
+        _ => todo!()
     };
 
     println!("resolution: {}x{}, depth: {}", width, height, bits_per_pixel);
 
-    let bytes_per_pixel = (bits_per_pixel / 8) as usize;
+    let bytes_per_pixel = pix_fmt.bytes_per_pixel();
     let line_length = width_virtual as usize * bytes_per_pixel;
     let fb_size = line_length * height as usize;
     let mut fb_data = vec![0u8; fb_size];
@@ -69,51 +76,7 @@ fn fbscreenshot(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     
     let img: RgbaImage = ImageBuffer::from_fn(width, height, |x, y| {
         let idx = (y as usize * line_length) + (x as usize * bytes_per_pixel);
-        
-        match bits_per_pixel {
-            32 => { // RGBA8888
-                image::Rgba([
-                    fb_data[idx],
-                    fb_data[idx+1],
-                    fb_data[idx+2],
-                    fb_data[idx+3]
-                ])
-            }
-            24 => { // RGB888
-                image::Rgba([
-                    fb_data[idx],
-                    fb_data[idx+1],
-                    fb_data[idx+2],
-                    255
-                ])
-            }
-            16 => {
-                let pixel = u16::from_le_bytes([fb_data[idx], fb_data[idx + 1]]);
-                let r = ((pixel >> 10) & 0x1F) as u8;
-                let g = ((pixel >> 5) & 0x1F) as u8;
-                let b = (pixel & 0x1F) as u8;
-
-                if is_argb1555 { // ARGB1555
-                    let a = if (pixel & 0x8000) != 0 { 255 } else { 0 };
-                    image::Rgba([
-                        (r << 3) | (r >> 2),
-                        (g << 3) | (g >> 2),
-                        (b << 3) | (b >> 2),
-                        a
-                    ])
-                } else { // RGB565
-                    image::Rgba([
-                        (r << 3) | (r >> 2),
-                        (g << 2) | (g >> 4),
-                        (b << 3) | (b >> 2),
-                        255
-                    ])
-                }
-            }
-            _ => { // fall back to blank pixel
-                image::Rgba([0, 0, 0, 255])
-            }
-        }
+        pix_fmt.get_pixel(&fb_data, idx)
     });
     
     println!("rotation: {:?}", &args.rotation);
@@ -132,10 +95,6 @@ fn fbscreenshot(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Args = argh::from_env();
-    if !&args.output.ends_with(".png") {
-        return Err("output filepath must end in .png".into())
-    }
-    
     match fbscreenshot(&args) {
         Ok(()) => {
             println!("fbscreenshot: saved screenshot to '{}'", &args.output);
